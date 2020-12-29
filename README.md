@@ -5,7 +5,7 @@ Self-contained room monitoring sensors for CO2, temperature, and humidity on ESP
 ESP-IDF release/v4.1
 
 ## Hardware
-* Controller: WEMOS LOLIN32 development board with embedded OLED display (branded HW-724, but any board of this nature should be suitable)
+* Controller: Wemos Lolin32 development board with embedded OLED display (branded HW-724, but any board of this nature should be suitable)
 * CO2 sensor: MH-Z19B
 * Temp/Hum sensor: DHT11
 
