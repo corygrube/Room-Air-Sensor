@@ -1,15 +1,19 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 #include "driver/uart.h"
+#include "dht11.h"
 
 #define UART_NUM UART_NUM_1
 #define BUF_SIZE 1024
 #define TXD_PIN 4
 #define RXD_PIN 5
+#define DHT11_PIN GPIO_NUM_0
 
-// UART initializaiton. UART controller/pins defined above
+// hardware/protocol initializaiton. Pins defined in globals
 void init(void) {
+	// UART config/init
 	const uart_config_t uart_config = {
 		.baud_rate = 9600,
 		.data_bits = UART_DATA_8_BITS,
@@ -18,14 +22,16 @@ void init(void) {
 		.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
 		.source_clk = UART_SCLK_APB,
 	};
-	
 	uart_driver_install(UART_NUM, BUF_SIZE, BUF_SIZE, 0, NULL, 0);
 	uart_param_config(UART_NUM, &uart_config);
 	uart_set_pin(UART_NUM, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+	// DHT11 init
+	DHT11_init(DHT11_PIN);
 }
 
 // UART (CO2) write task
-static void tx_task(void *arg) {
+static void tx_task(void *pvParameters) {
 	// define debug logger
 	static const char *TX_TASK_TAG = "TX_TASK";
 	esp_log_level_set(TX_TASK_TAG, ESP_LOG_DEBUG);
@@ -45,7 +51,7 @@ static void tx_task(void *arg) {
 }
 
 // UART (CO2) read task
-static void rx_task(void *arg) {
+static void rx_task(void *pvParameters) {
 	// define debug logger
 	static const char *RX_TASK_TAG = "RX_TASK";
 	esp_log_level_set(RX_TASK_TAG, ESP_LOG_DEBUG);
@@ -69,8 +75,8 @@ static void rx_task(void *arg) {
 				ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, data, rxBytes, ESP_LOG_DEBUG);
 				
 				// calculate and log CO2. Byte 2 is high byte, Byte 3 is low byte
-				const int CO2 = data[2] * 256 + data[3];
-				ESP_LOGI(RX_TASK_TAG, "Current CO2 measurement: %d ppm", CO2);
+				const int co2 = data[2] * 256 + data[3];
+				ESP_LOGI(RX_TASK_TAG, "Current CO2 measurement: %d ppm", co2);
 			}
 		}
 		// check for reads every second
@@ -80,10 +86,33 @@ static void rx_task(void *arg) {
 	free(data);
 }
 
+// DHT11 read task
+static void dht_read(void *pvParameters) {
+	// define debug logger
+	static const char *DHT11_TASK_TAG = "DHT11_TASK";
+	esp_log_level_set(DHT11_TASK_TAG, ESP_LOG_DEBUG);
+	
+	while(1) {
+		// read/log temperature
+		const int temp = DHT11_read().temperature;
+		ESP_LOGI(DHT11_TASK_TAG, "Current temperature: %d°C", temp);
+
+		// read/log humidity
+		const int hum = DHT11_read().humidity;
+		ESP_LOGI(DHT11_TASK_TAG, "Current temperature: %d%%", hum);
+
+		// read once per sec
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	}
+}
+
 // startup
 void app_main(void) {
-	// start UART, read/write tasks
+	// start UART, DHT11
 	init();
+		
+	// start read/write tasks
+	xTaskCreate(dht_read, "DHT11_read_task", 1024*2, NULL, 3, NULL);
 	xTaskCreate(rx_task, "uart_rx_task", 1024*2, NULL, 2, NULL);
 	xTaskCreate(tx_task, "uart_tx_task", 1024*2, NULL, 1, NULL);
 }
