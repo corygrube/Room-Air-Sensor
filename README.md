@@ -16,3 +16,4 @@ ESP-IDF release/v4.1
 	* Actually get MQTT to work
 * Add wiring diagram
 * Learn more about/optimize FreeRTOS task structure
+* Split DHT11 and MH-Z19B control to standalone components
