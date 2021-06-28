@@ -2,7 +2,7 @@
 Self-contained room monitoring sensors for CO2, temperature, and humidity on ESP32
 
 ## Framework
-ESP-IDF release/v4.1
+ESP-IDF release/v4.3
 
 ## Hardware
 * Controller: Wemos Lolin32 development board with embedded OLED display (branded HW-724, but any board of this nature should be suitable)
@@ -10,10 +10,16 @@ ESP-IDF release/v4.1
 * Temp/Hum sensor: DHT11
 
 ## To Do
-* Add DHT11 temperature/humidity sensor
-* Configure OLED for local sensor display
-* Add Wifi/MQTT for remote monitoring
-	* Actually get MQTT to work
-* Add wiring diagram
-* Learn more about/optimize FreeRTOS task structure
-* Split DHT11 and MH-Z19B control to standalone components
+* Features
+	* Configure as Wifi station
+	* Add MQTT for remote monitoring
+	* Configure embedded OLED for local sensor display
+* Optimizations
+	* Rework get_CO2 to not rely on vTaskDelay (event handler?)
+	* Improve error handling (/add it at all)
+	* Consider revisiting tasks one day?
+	* Add toggle for debug logger toggle via menuconfig
+* Documentation
+	* Draw wiring diagram (/PCB layout?)
+	* Improve comments
+	* Add instructions for dependencies
