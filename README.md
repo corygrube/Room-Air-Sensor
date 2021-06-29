@@ -23,3 +23,4 @@ ESP-IDF release/v4.3
 		* Design circuit/PCB/Enclosure to make this a self-contained USB dongle
 	* Improve comments
 	* Add instructions for dependencies
+	* Add instructions for wifi parameter config (MenuConfig)
