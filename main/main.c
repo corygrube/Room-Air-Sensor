@@ -100,16 +100,21 @@ void wifi_init(void) {
     }
     ESP_ERROR_CHECK(ret);
 
+    // create event group
 	s_wifi_event_group = xEventGroupCreate();
 
+    // TCP stack init
     ESP_ERROR_CHECK(esp_netif_init());
 
+    // create default event loop, default wifi station
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
 
+    // init wifi with default config
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
+    // register event handler instances for WIFI_EVENTs/IP_EVENT
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
@@ -123,6 +128,7 @@ void wifi_init(void) {
                                                         NULL,
                                                         &instance_got_ip));
 
+    // define wifi config from menuconfig params
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = EXAMPLE_ESP_WIFI_SSID,
@@ -138,11 +144,13 @@ void wifi_init(void) {
             },
         },
     };
+
+    // Set wifi mode to station, configure, and start
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
     ESP_ERROR_CHECK(esp_wifi_start() );
 
-    ESP_LOGI(LOG, "wifi_init_sta finished.");
+    ESP_LOGI(LOG, "Wifi initialization complete");
 
     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
      * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
