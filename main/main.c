@@ -41,21 +41,35 @@ static int s_retry_num = 0;
 // Define default logger
 static const char *LOG = "Logger";
 
-static void event_handler(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data)
+// Wifi event handler
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                               int32_t event_id, void* event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+    if (event_id == WIFI_EVENT_STA_START) {
+        // initial connection attempt
         esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+    
+    } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        // attempt reconnect on disconnect
         if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
+            // Attempt to reconnect and increment retry number
             esp_wifi_connect();
             s_retry_num++;
             ESP_LOGI(LOG, "retry to connect to the AP");
         } else {
+            // Set group bits on failure to reconnect
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+            ESP_LOGI(LOG,"connect to the AP fail");
         }
-        ESP_LOGI(LOG,"connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+    }
+}
+
+// IP event handler
+static void ip_event_handler(void* arg, esp_event_base_t event_base,
+                             int32_t event_id, void* event_data)
+{
+    if (event_id == IP_EVENT_STA_GOT_IP) {
+        // Log IP info and set event group bits. Reset retry number.
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(LOG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
@@ -87,12 +101,15 @@ void sensor_init(void) {
 	ESP_LOGI(LOG, "DHT11 initialized on pin %d", DHT11_PIN);
 
 	// inits complete
-	ESP_LOGI(LOG, "Wifi initialization complete");
+	ESP_LOGI(LOG, "Sensor initialization complete");
 }
 
 // Wifi initialization
 void wifi_init(void) {
-	//Initialize NVS
+	// Wifi inits starting 
+	ESP_LOGI(LOG, "Wifi initialization started");
+    
+    //Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
@@ -114,17 +131,17 @@ void wifi_init(void) {
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    // register event handler instances for WIFI_EVENTs/IP_EVENT
+    // register event handler instances for WIFI_EVENT/IP_EVENT events
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
-                                                        &event_handler,
+                                                        &wifi_event_handler,
                                                         NULL,
                                                         &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
                                                         IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
+                                                        &ip_event_handler,
                                                         NULL,
                                                         &instance_got_ip));
 
