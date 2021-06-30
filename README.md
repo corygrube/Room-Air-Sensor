@@ -18,6 +18,7 @@ ESP-IDF release/v4.3
 	* Rework get_CO2 to not rely on vTaskDelay (event handler?)
 	* Improve error handling (/add it at all)
 	* Consider revisiting tasks one day?
+	* Add 5 minute(+/-?) startup delay for CO2 - readings often invalid/frozen on boot
 * Documentation
 	* Draw wiring diagram (/PCB layout?)
 		* Design circuit/PCB/Enclosure to make this a self-contained USB dongle
