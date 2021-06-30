@@ -19,6 +19,8 @@ ESP-IDF release/v4.3
 	* Improve error handling (/add it at all)
 	* Consider revisiting tasks one day?
 	* Add 5 minute(+/-?) startup delay for CO2 - readings often invalid/frozen on boot
+	* Identify source of occasional 1DegC/1%RH readings from DHT11.
+		* Presumably Either bad hardware, or timeout/error return from library
 * Documentation
 	* Draw wiring diagram (/PCB layout?)
 		* Design circuit/PCB/Enclosure to make this a self-contained USB dongle
