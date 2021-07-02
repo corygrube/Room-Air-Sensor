@@ -21,6 +21,7 @@ ESP-IDF release/v4.3
 	* Add 5 minute(+/-?) startup delay for CO2 - readings often invalid/frozen on boot
 	* Identify source of occasional 1DegC/1%RH readings from DHT11.
 		* Presumably Either bad hardware, or timeout/error return from library
+		* If they're a fact of life, implement retry logic
 * Documentation
 	* Draw wiring diagram (/PCB layout?)
 		* Design circuit/PCB/Enclosure to make this a self-contained USB dongle
