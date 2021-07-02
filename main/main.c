@@ -1,6 +1,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -8,9 +9,10 @@
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
-#include "dht11.h"
 #include "lwip/err.h"
 #include "lwip/sys.h"
+
+#include "dht11.h"
 
 // sensor definitions
 #define UART_NUM UART_NUM_1
@@ -25,18 +27,13 @@
 */
 #define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
 #define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
-#define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
 
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
 
 /* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP
- * - we failed to connect after the maximum amount of retries */
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
-
-static int s_retry_num = 0;
+ * - we are connected to the AP with an IP */
+#define WIFI_CONNECTED_BIT  BIT0
 
 // Define default logger
 static const char *LOG = "Logger";
@@ -46,21 +43,26 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data)
 {
     if (event_id == WIFI_EVENT_STA_START) {
-        // initial connection attempt
-        esp_wifi_connect();
+        // attempt initial connection
+        ESP_LOGI(LOG, "Wifi started successfully. Attempting initial connection.");
+        esp_err_t ret = esp_wifi_connect();
+        if (ret != ESP_OK) {
+            ESP_LOGE(LOG, "%s", esp_err_to_name(ret));
+        }
     
     } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        // attempt reconnect on disconnect
-        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
-            // Attempt to reconnect and increment retry number
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(LOG, "retry to connect to the AP");
-        } else {
-            // Set group bits on failure to reconnect
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-            ESP_LOGI(LOG,"connect to the AP fail");
+        // Clear connected status bit. Attempt to reconnect 
+        ESP_LOGE(LOG, "Wifi disconnected or connection attempt failed. Retrying connection in 30s.");
+        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        vTaskDelay(30000 / portTICK_PERIOD_MS);
+        esp_err_t ret = esp_wifi_connect();
+        if (ret != ESP_OK) {
+            ESP_LOGE(LOG, "%s", esp_err_to_name(ret));
         }
+
+    } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
+        // Log connection success. Don't change connected status bit until IP is obtained
+        ESP_LOGI(LOG, "Wifi connected successfully.");
     }
 }
 
@@ -72,7 +74,6 @@ static void ip_event_handler(void* arg, esp_event_base_t event_base,
         // Log IP info and set event group bits. Reset retry number.
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(LOG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -132,18 +133,16 @@ void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     // register event handler instances for WIFI_EVENT/IP_EVENT events
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
                                                         &wifi_event_handler,
                                                         NULL,
-                                                        &instance_any_id));
+                                                        NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
                                                         IP_EVENT_STA_GOT_IP,
                                                         &ip_event_handler,
                                                         NULL,
-                                                        &instance_got_ip));
+                                                        NULL));
 
     // define wifi config from menuconfig params
     wifi_config_t wifi_config = {
@@ -169,35 +168,12 @@ void wifi_init(void) {
 
     ESP_LOGI(LOG, "Wifi initialization complete");
 
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
-
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(LOG, "connected to ap SSID:%s password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(LOG, "Failed to connect to SSID:%s, password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    } else {
-        ESP_LOGE(LOG, "UNEXPECTED EVENT");
-    }
-
-    /* The event will not be processed after unregister */
-    ESP_ERROR_CHECK(esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, instance_got_ip));
-    ESP_ERROR_CHECK(esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, instance_any_id));
-    vEventGroupDelete(s_wifi_event_group);
+    // Note that Wifi is not conected yet, just initialized/started
 }
 
 // MH-Z19B read CO2
 // Combines both TX/RX UART steps
-// Lazy implementation, async implementation possible in future
+// async implementation possible in future
 // Returns CO2 integer in ppm (0-5000)
 // If read is unsuccessful, returns -1
 int get_co2(void) {
@@ -212,31 +188,33 @@ int get_co2(void) {
 	const int txBytes = uart_write_bytes(UART_NUM, (const char*) cmd, 9);
 	ESP_LOGD(LOG, "Wrote %d bytes", txBytes);
 
-	// [LAZY/BAD PRACTICE] Wait 1s for response
-	vTaskDelay(1000 / portTICK_PERIOD_MS);
+	// Wait 100ms for response
+	vTaskDelay(100 / portTICK_PERIOD_MS);
 
 	// UART RX
-	// [LAZY/BAD PRACTICE] Assume all 9 bytes are in
+	// Assume buffer has only 9 bytes are in (trust but verify)
 	// read-buffer allocation
 	uint8_t* data = (uint8_t*) malloc(9);
 	// read 9 byte response, init co2
 	const int rxBytes = uart_read_bytes(UART_NUM, data, 9, 0);
 	int co2 = 0;
-	// if read was successful:
-	if (rxBytes > 0) {
-		// log read
+	
+    // Check if read had correct number of bytes (9=successful):
+	if (rxBytes == 9) {
+		// log read bytes
 		ESP_LOGD(LOG, "Read %d bytes: '%x'", rxBytes, (unsigned int) data);
 		ESP_LOG_BUFFER_HEXDUMP(LOG, data, rxBytes, ESP_LOG_DEBUG);
 		// calculate and log CO2. Byte 2 is high byte, Byte 3 is low byte
 		co2 = data[2] * 256 + data[3];
 		ESP_LOGI(LOG, "CO2 read successfully. Current: %d ppm", co2);
-	}
-	// if read unsuccessful:
-	else {
+	
+    } else {
+        // log error and set invalid reading
 		co2 = -1;
-		ESP_LOGI(LOG, "Problem Reading CO2");
+		ESP_LOGE(LOG, "Problem Reading CO2");
 	}
-	// free malloc and return
+	
+    // free malloc and return
 	free(data);
 	return co2;
 }
@@ -261,7 +239,7 @@ int get_humidity(void) {
 void app_main(void) {
 	// log program start
 	ESP_LOGI(LOG, "Program started");
-	
+
 	// initialize sensor hardware/protocols (UART, DHT11)
 	sensor_init();
 
@@ -275,7 +253,17 @@ void app_main(void) {
 		int humidity = get_humidity();
 		int co2 = get_co2();
 
-		// repeat every 5s
+        // Check if Wifi is connected
+        EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
+        if (bits & WIFI_CONNECTED_BIT) {
+            // MQTT logic probably maybe possibly
+            // May roll sensor reads into here. depends on how MQTT works
+        
+        } else {
+            // MQTT skip/queue logic, i guess? may not be necessary
+        }
+
+		// wait 5s before repeating
 		ESP_LOGI(LOG, "Program loop waiting");
 		vTaskDelay(5000 / portTICK_PERIOD_MS);
 		ESP_LOGI(LOG, "Program loop completed");
