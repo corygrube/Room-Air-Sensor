@@ -21,13 +21,6 @@
 #define RXD_PIN 5
 #define DHT11_PIN GPIO_NUM_0
 
-/* The examples use WiFi configuration that you can set via project configuration menu
-   If you'd rather not, just change the below entries to strings with
-   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
-*/
-#define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
-#define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
-
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
 
@@ -147,8 +140,8 @@ void wifi_init(void) {
     // define wifi config from menuconfig params
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = EXAMPLE_ESP_WIFI_SSID,
-            .password = EXAMPLE_ESP_WIFI_PASS,
+            .ssid = CONFIG_ESP_WIFI_SSID,
+            .password = CONFIG_ESP_WIFI_PASSWORD,
             /* Setting a password implies station will connect to all security modes including WEP/WPA.
              * However these modes are deprecated and not advisable to be used. Incase your Access point
              * doesn't support WPA2, these mode can be enabled by commenting below line */
