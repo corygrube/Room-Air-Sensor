@@ -11,12 +11,10 @@ ESP-IDF release/v4.3
 
 ## To Do
 * Features
-	* Configure as Wifi station
 	* Add MQTT for remote monitoring
 	* Configure embedded OLED for local sensor display
 * Optimizations
 	* Rework get_CO2 to not rely on vTaskDelay (event handler?)
-	* Improve error handling (/add it at all)
 	* Consider revisiting tasks one day?
 	* Add 5 minute(+/-?) startup delay for CO2 - readings often invalid/frozen on boot
 	* Identify source of occasional 1DegC/1%RH readings from DHT11.
