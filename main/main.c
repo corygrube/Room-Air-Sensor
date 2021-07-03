@@ -212,20 +212,27 @@ int get_co2(void) {
 	return co2;
 }
 
-// DHT11 read temperature
-// Returns temperature integer in DegC
-int get_temp(void) {
-	const int temp = DHT11_read().temperature;
-	ESP_LOGI(LOG, "Temperature read successfully. Current: %d°C", temp);
-	return temp;
-}
+// Get DHT11 data (Temperature/Humidity)
+struct dht11_reading get_dht11(void) {
+    struct dht11_reading data = DHT11_read();
+    // Check if read was successful
+    if (data.status == DHT11_OK) {
+        // Log new data
+        ESP_LOGI(LOG, "Temperature read successfully. Current: %d°C", data.temperature);
+        ESP_LOGI(LOG, "Humidity read successfully. Current: %d%%", data.humidity);
+    } else {
+        // Log warning for read error
+        ESP_LOGW(LOG, "Error reading DHT11 temperature/humidity. "
+                      "Last successful read retained.");
+        // Log cause of error from status
+        if (data.status == DHT11_CRC_ERROR) {
+            ESP_LOGW(LOG, "Error cause: CRC Error");
+        } else {
+            ESP_LOGW(LOG, "Error cause: Read Timeout");
+        }
+    }
 
-// DHT11 read humidity
-// Returns humidity integer in %RH
-int get_humidity(void) {
-	const int humidity = DHT11_read().humidity;
-	ESP_LOGI(LOG, "Humidity read successfully. Current: %d%%", humidity);
-	return humidity;
+    return data;
 }
 
 // Main
@@ -242,8 +249,11 @@ void app_main(void) {
 	// main loop
 	while (1) {
 		ESP_LOGI(LOG, "Program loop started");
-		int temp = get_temp();
-		int humidity = get_humidity();
+		
+        // Read DHT11 (Temperature/Humidity)
+        struct dht11_reading dht11_data = get_dht11();
+        
+        // Read MH-Z19B (CO2)
 		int co2 = get_co2();
 
         // Check if Wifi is connected
