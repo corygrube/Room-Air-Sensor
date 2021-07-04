@@ -26,11 +26,10 @@
  * FreeRTOS event group manages/gets bit states
  * Custom bit names mapped to pre-defined BITx registers
  */
-static EventGroupHandle_t s_event_group;   // Change to s_event_group
-#define WIFI_CONNECTED_BIT  BIT0
-/*
- * More status bits to come
- */
+static EventGroupHandle_t s_event_group;
+#define WIFI_CONNECTED_BIT  BIT0    // wifi connected and IP assigned
+#define DHT11_OK_BIT        BIT1    // Last DHT11 read was successful
+#define CO2_OK_BIT          BIT2    // Last CO2 read was successful
 
 // default logger
 static const char *LOG = "Logger";
@@ -55,7 +54,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 {
     if (event_id == WIFI_EVENT_STA_START) {
         // Attempt initial connection
-        ESP_LOGI(LOG, "Wifi started successfully. Attempting initial connection.");
+        ESP_LOGD(LOG, "Wifi started successfully. Attempting initial connection.");
         esp_err_t ret = esp_wifi_connect();
         if (ret != ESP_OK) {
             ESP_LOGE(LOG, "%s", esp_err_to_name(ret));
@@ -63,7 +62,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     
     } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
         // Clear connected status bit. Attempt to reconnect after 30s 
-        ESP_LOGE(LOG, "Wifi disconnected or connection attempt failed. Retrying connection in 30s.");
+        ESP_LOGW(LOG, "Wifi disconnected or connection attempt failed. Retrying connection in 30s.");
         xEventGroupClearBits(s_event_group, WIFI_CONNECTED_BIT);
         vTaskDelay(30000 / portTICK_PERIOD_MS);
         esp_err_t ret = esp_wifi_connect();
@@ -113,6 +112,7 @@ static void ip_event_handler(void* arg, esp_event_base_t event_base,
  */
 void system_init(void)
 {
+    ESP_LOGD(LOG, "System initialization started");
     s_event_group = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
@@ -125,6 +125,7 @@ void system_init(void)
                                                         &ip_event_handler,
                                                         NULL,
                                                         NULL));
+    ESP_LOGD(LOG, "System initialization complete");
 }
 
 /*
@@ -137,7 +138,7 @@ void system_init(void)
 void sensor_init(void)
 {
 	// inits starting 
-	ESP_LOGI(LOG, "Sensor initialization started");
+	ESP_LOGD(LOG, "Sensor initialization started");
 
 	// UART config/init
 	const uart_config_t uart_config = {
@@ -153,14 +154,14 @@ void sensor_init(void)
 	ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_config));
 	ESP_ERROR_CHECK(uart_set_pin(UART_NUM, TXD_PIN, RXD_PIN,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-	ESP_LOGI(LOG, "UART initialized on TX/RX pins %d, %d", TXD_PIN, RXD_PIN);
+	ESP_LOGD(LOG, "UART initialized on TX/RX pins %d, %d", TXD_PIN, RXD_PIN);
 
 	// DHT11 init
 	DHT11_init(DHT11_PIN);
-	ESP_LOGI(LOG, "DHT11 initialized on pin %d", DHT11_PIN);
+	ESP_LOGD(LOG, "DHT11 initialized on pin %d", DHT11_PIN);
 
 	// inits complete
-	ESP_LOGI(LOG, "Sensor initialization complete");
+	ESP_LOGD(LOG, "Sensor initialization complete");
 }
 
 /*
@@ -172,7 +173,7 @@ void sensor_init(void)
 void wifi_init(void)
 {
 	// Wifi inits starting 
-	ESP_LOGI(LOG, "Wifi initialization started");
+	ESP_LOGD(LOG, "Wifi initialization started");
     
     // Initialize non-volatile storage
     esp_err_t ret = nvs_flash_init();
@@ -215,7 +216,7 @@ void wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
     ESP_ERROR_CHECK(esp_wifi_start() );
 
-    ESP_LOGI(LOG, "Wifi initialization complete");
+    ESP_LOGD(LOG, "Wifi initialization complete");
 
     // Note that Wifi is not conected yet, just initialized/started
 }
@@ -249,8 +250,8 @@ int get_co2(void)
 
 	// Wait 100ms for response
 	vTaskDelay(100 / portTICK_PERIOD_MS);
-
-	/* UART RX */
+	
+    /* UART RX */
 	// Assume buffer has only 9 bytes
 	uint8_t* data = (uint8_t*) malloc(9);
 	const int rxBytes = uart_read_bytes(UART_NUM, data, 9, 0);
@@ -262,12 +263,16 @@ int get_co2(void)
 		ESP_LOG_BUFFER_HEXDUMP(LOG, data, rxBytes, ESP_LOG_DEBUG);
 		// calculate CO2. Byte 2 is high byte, Byte 3 is low byte
 		co2 = data[2] * 256 + data[3];
-		ESP_LOGI(LOG, "CO2 read successfully. Current: %d ppm", co2);
+		ESP_LOGI(LOG, "New CO2 reading: %d ppm", co2);
+        // Update event group bit
+        xEventGroupSetBits(s_event_group, CO2_OK_BIT);
 	
     } else {
-        // log error and set error value (-1)
+        // log warning for read fault, set on-error value (-1)
 		co2 = -1;
-		ESP_LOGE(LOG, "Problem Reading CO2");
+		ESP_LOGW(LOG, "CO2 Read Fault");
+        // update event group bit
+        xEventGroupClearBits(s_event_group, CO2_OK_BIT);
 	}
 	
     // free malloc and return
@@ -287,7 +292,7 @@ int get_co2(void)
  *      dht11_reading struct
  *          *.temperature in DegC
  *          *.humidity in %RH
- *          *.status enum (0=OK, -1/-2=BAD)
+ *          *.status enum (0=OK, -1=TIMEOUT_ERROR, -2=CRC_ERROR)
  *          
  *          On error, returns -1 for temp/humidity
  */
@@ -297,21 +302,24 @@ struct dht11_reading get_dht11(void)
     // Check if read was successful
     if (data.status == DHT11_OK) {
         // Log new data
-        ESP_LOGI(LOG, "Temperature read successfully. Current: %d°C",
+        ESP_LOGI(LOG, "New temperature reading: %d°C",
                  data.temperature);
-        ESP_LOGI(LOG, "Humidity read successfully. Current: %d%%",
+        ESP_LOGI(LOG, "New humidity reading: %d%%RH",
                  data.humidity);
-    
+        // Update event group bit
+        xEventGroupSetBits(s_event_group, DHT11_OK_BIT);
     } else {
-        // Log warning for read error
-        ESP_LOGW(LOG, "Error reading DHT11 temperature/humidity. "
-                      "Last successful read retained.");
-        // Log cause of error from status
+        // Log warning and cause of read fault
+        ESP_LOGW(LOG, "DHT11 read fault.");
         if (data.status == DHT11_CRC_ERROR) {
-            ESP_LOGW(LOG, "Error cause: CRC Error");
+            ESP_LOGW(LOG, "Cause of Fault: CRC Error");
+        } else if (data.status == DHT11_TIMEOUT_ERROR) {
+            ESP_LOGW(LOG, "Cause of Fault: Read Timeout");
         } else {
-            ESP_LOGW(LOG, "Error cause: Read Timeout");
+            ESP_LOGW(LOG, "Cause of Fault: Unknown");
         }
+        // Update event group bit
+        xEventGroupClearBits(s_event_group, DHT11_OK_BIT);
     }
     return data;
 }
@@ -334,7 +342,7 @@ void app_main(void)
 
 	// main loop
 	while (1) {
-		ESP_LOGI(LOG, "Program loop started");
+		ESP_LOGD(LOG, "Program loop started");
 		
         // Read DHT11 (Temperature/Humidity)
         struct dht11_reading dht11_data = get_dht11();
@@ -347,14 +355,19 @@ void app_main(void)
         if (bits & WIFI_CONNECTED_BIT) {
             // MQTT logic probably maybe possibly
             // May roll sensor reads into here. depends on how MQTT works
-        
+            if (bits & DHT11_OK_BIT) {
+                // MQTT Pub logic
+            }
+            if (bits & CO2_OK_BIT) {
+                // MQTT Pub logic
+            }
         } else {
             // MQTT skip/queue logic, i guess? may not be necessary
         }
 
 		// wait 5s before repeating
-		ESP_LOGI(LOG, "Program loop waiting");
+		ESP_LOGD(LOG, "Program loop waiting");
 		vTaskDelay(5000 / portTICK_PERIOD_MS);
-		ESP_LOGI(LOG, "Program loop completed");
+		ESP_LOGD(LOG, "Program loop completed");
 	}
 }
