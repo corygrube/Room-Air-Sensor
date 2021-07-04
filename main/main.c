@@ -15,28 +15,46 @@
 #include "dht11.h"
 
 // sensor definitions
-#define UART_NUM UART_NUM_1
+#define UART_NUM UART_NUM_1     // Reserving UART0 for USB comms, so UART 1 was used
 #define BUF_SIZE 1024
 #define TXD_PIN 4
 #define RXD_PIN 5
 #define DHT11_PIN GPIO_NUM_0
 
-/* FreeRTOS event group to signal when we are connected*/
-static EventGroupHandle_t s_wifi_event_group;
-
-/* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP */
+/*
+ * Signal bits used for program flow control
+ * FreeRTOS event group manages/gets bit states
+ * Custom bit names mapped to pre-defined BITx registers
+ */
+static EventGroupHandle_t s_event_group;   // Change to s_event_group
 #define WIFI_CONNECTED_BIT  BIT0
+/*
+ * More status bits to come
+ */
 
-// Define default logger
+// default logger
 static const char *LOG = "Logger";
 
-// Wifi event handler
+/*
+ * Function: wifi_event_handler
+ * -----
+ * Description:
+ *      Event handler for all WiFi events.
+ *      Utilized on WiFi startup, connected, and disconnected.
+ *      Attempts to maintain WiFi connection at all times and manage
+ *          WIFI_CONNECTED_BIT event group bit.
+ * 
+ * Arguments:
+ *      arg: Data passed to event handler (null in this case)
+ *      event_base: always WIFI_EVENT
+ *      event_id: the specific WIFI_EVENT triggering the handler
+ *      event_data: data specific to the event
+ */
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data)
 {
     if (event_id == WIFI_EVENT_STA_START) {
-        // attempt initial connection
+        // Attempt initial connection
         ESP_LOGI(LOG, "Wifi started successfully. Attempting initial connection.");
         esp_err_t ret = esp_wifi_connect();
         if (ret != ESP_OK) {
@@ -44,9 +62,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         }
     
     } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        // Clear connected status bit. Attempt to reconnect 
+        // Clear connected status bit. Attempt to reconnect after 30s 
         ESP_LOGE(LOG, "Wifi disconnected or connection attempt failed. Retrying connection in 30s.");
-        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        xEventGroupClearBits(s_event_group, WIFI_CONNECTED_BIT);
         vTaskDelay(30000 / portTICK_PERIOD_MS);
         esp_err_t ret = esp_wifi_connect();
         if (ret != ESP_OK) {
@@ -59,20 +77,65 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-// IP event handler
+
+/*
+ * Function: ip_event_handler
+ * -----
+ * Description:
+ *      event handler for all IP events.
+ *      Utilized to set WIFI_CONNECTED_BIT event group bit
+ *          when IP address is assigned.
+ * 
+ * Arguments:
+ *      arg: Data passed to event handler (null in this case)
+ *      event_base: always IP_EVENT
+ *      event_id: the specific IP_EVENT triggering the handler
+ *      event_data: data specific to the event
+ */
 static void ip_event_handler(void* arg, esp_event_base_t event_base,
                              int32_t event_id, void* event_data)
 {
     if (event_id == IP_EVENT_STA_GOT_IP) {
-        // Log IP info and set event group bits. Reset retry number.
+        // Log IP info and set event group bits.
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(LOG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        xEventGroupSetBits(s_event_group, WIFI_CONNECTED_BIT);
     }
 }
 
-// sensor hardware/protocol initializaiton. Pins defined in globals
-void sensor_init(void) {
+/*
+ * Function: system_init
+ * -----
+ * Description:
+ *      Creates event group.
+ *      Creates default event loop.
+ *      Registers wifi_event_handler and ip_event_handler functions.
+ */
+void system_init(void)
+{
+    s_event_group = xEventGroupCreate();
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &ip_event_handler,
+                                                        NULL,
+                                                        NULL));
+}
+
+/*
+ * Function: sensor_init
+ * -----
+ * Description:
+ *      Initializes and configures UART for MH-Z19B (CO2) reads
+ *      Runs DHT11 init function
+ */
+void sensor_init(void)
+{
 	// inits starting 
 	ESP_LOGI(LOG, "Sensor initialization started");
 
@@ -85,9 +148,11 @@ void sensor_init(void) {
 		.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
 		.source_clk = UART_SCLK_APB,
 	};
-	uart_driver_install(UART_NUM, BUF_SIZE, BUF_SIZE, 0, NULL, 0);
-	uart_param_config(UART_NUM, &uart_config);
-	uart_set_pin(UART_NUM, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+	ESP_ERROR_CHECK(uart_driver_install(UART_NUM, BUF_SIZE, BUF_SIZE, 0,
+                                        NULL, 0));
+	ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_config));
+	ESP_ERROR_CHECK(uart_set_pin(UART_NUM, TXD_PIN, RXD_PIN,
+                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 	ESP_LOGI(LOG, "UART initialized on TX/RX pins %d, %d", TXD_PIN, RXD_PIN);
 
 	// DHT11 init
@@ -98,44 +163,35 @@ void sensor_init(void) {
 	ESP_LOGI(LOG, "Sensor initialization complete");
 }
 
-// Wifi initialization
-void wifi_init(void) {
+/*
+ * Function: wifi_init
+ * -----
+ * Description:
+ *      Initializes and configures WiFi
+ */
+void wifi_init(void)
+{
 	// Wifi inits starting 
 	ESP_LOGI(LOG, "Wifi initialization started");
     
-    //Initialize NVS
+    // Initialize non-volatile storage
     esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
+        ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
       ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
-    // create event group
-	s_wifi_event_group = xEventGroupCreate();
-
-    // TCP stack init
+    // init TCP stack
     ESP_ERROR_CHECK(esp_netif_init());
 
-    // create default event loop, default wifi station
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    // create default wifi station
     esp_netif_create_default_wifi_sta();
 
     // init wifi with default config
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    // register event handler instances for WIFI_EVENT/IP_EVENT events
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &ip_event_handler,
-                                                        NULL,
-                                                        NULL));
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));    
 
     // define wifi config from menuconfig params
     wifi_config_t wifi_config = {
@@ -164,17 +220,27 @@ void wifi_init(void) {
     // Note that Wifi is not conected yet, just initialized/started
 }
 
-// MH-Z19B read CO2
-// Combines both TX/RX UART steps
-// async implementation possible in future
-// Returns CO2 integer in ppm (0-5000)
-// If read is unsuccessful, returns -1
-int get_co2(void) {
-	// flush UART buffer data
+/*
+ * Function: get_co2
+ * -----
+ * Description:
+ *      Reads current CO2 measurement from MH-Z19B sensor.
+ *      3 step process: UART write command, UART read response,
+ *          calculate CO2 from response
+ *      Event group bits denote whether most recent reading is valid.
+ * 
+ * Returns:
+ *      CO2 measurement in ppm (0-5000)
+ *          On error, returns -1
+ */
+int get_co2(void)
+{
+	/* UART Prep */
+    // flush UART buffer data
 	uart_flush(UART_NUM);
 	ESP_LOGD(LOG, "UART buffer flushed ahead of CO2 read");
 
-	// UART TX
+	/* UART TX */
 	// hard-coded command for CO2 measurement - see documentation for more info
 	const char cmd[] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
 	// UART write
@@ -184,25 +250,22 @@ int get_co2(void) {
 	// Wait 100ms for response
 	vTaskDelay(100 / portTICK_PERIOD_MS);
 
-	// UART RX
-	// Assume buffer has only 9 bytes are in (trust but verify)
-	// read-buffer allocation
+	/* UART RX */
+	// Assume buffer has only 9 bytes
 	uint8_t* data = (uint8_t*) malloc(9);
-	// read 9 byte response, init co2
 	const int rxBytes = uart_read_bytes(UART_NUM, data, 9, 0);
 	int co2 = 0;
 	
     // Check if read had correct number of bytes (9=successful):
 	if (rxBytes == 9) {
-		// log read bytes
 		ESP_LOGD(LOG, "Read %d bytes: '%x'", rxBytes, (unsigned int) data);
 		ESP_LOG_BUFFER_HEXDUMP(LOG, data, rxBytes, ESP_LOG_DEBUG);
-		// calculate and log CO2. Byte 2 is high byte, Byte 3 is low byte
+		// calculate CO2. Byte 2 is high byte, Byte 3 is low byte
 		co2 = data[2] * 256 + data[3];
 		ESP_LOGI(LOG, "CO2 read successfully. Current: %d ppm", co2);
 	
     } else {
-        // log error and set invalid reading
+        // log error and set error value (-1)
 		co2 = -1;
 		ESP_LOGE(LOG, "Problem Reading CO2");
 	}
@@ -212,14 +275,33 @@ int get_co2(void) {
 	return co2;
 }
 
-// Get DHT11 data (Temperature/Humidity)
-struct dht11_reading get_dht11(void) {
+/*
+ * Function: dht11_reading
+ * -----
+ * Description:
+ *      Reads current temp/humidity measurement from DHT11 sensor.
+ *      status enum used to determine data validity.
+ *      Event group bits denote whether most recent reading is valid.
+ * 
+ * Returns:
+ *      dht11_reading struct
+ *          *.temperature in DegC
+ *          *.humidity in %RH
+ *          *.status enum (0=OK, -1/-2=BAD)
+ *          
+ *          On error, returns -1 for temp/humidity
+ */
+struct dht11_reading get_dht11(void)
+{
     struct dht11_reading data = DHT11_read();
     // Check if read was successful
     if (data.status == DHT11_OK) {
         // Log new data
-        ESP_LOGI(LOG, "Temperature read successfully. Current: %d°C", data.temperature);
-        ESP_LOGI(LOG, "Humidity read successfully. Current: %d%%", data.humidity);
+        ESP_LOGI(LOG, "Temperature read successfully. Current: %d°C",
+                 data.temperature);
+        ESP_LOGI(LOG, "Humidity read successfully. Current: %d%%",
+                 data.humidity);
+    
     } else {
         // Log warning for read error
         ESP_LOGW(LOG, "Error reading DHT11 temperature/humidity. "
@@ -231,20 +313,24 @@ struct dht11_reading get_dht11(void) {
             ESP_LOGW(LOG, "Error cause: Read Timeout");
         }
     }
-
     return data;
 }
 
-// Main
-void app_main(void) {
-	// log program start
+/*
+ * Function: app_main
+ * -----
+ * Description:
+ *      Main loop.
+ *      Runs init functions, reads data, and transmits valid data over MQTT
+ */
+void app_main(void)
+{
 	ESP_LOGI(LOG, "Program started");
 
-	// initialize sensor hardware/protocols (UART, DHT11)
-	sensor_init();
-
-	// initialize wifi
-	wifi_init();
+	// Run initialization functions
+	system_init();
+    sensor_init();
+    wifi_init();
 
 	// main loop
 	while (1) {
@@ -257,7 +343,7 @@ void app_main(void) {
 		int co2 = get_co2();
 
         // Check if Wifi is connected
-        EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
+        EventBits_t bits = xEventGroupGetBits(s_event_group);
         if (bits & WIFI_CONNECTED_BIT) {
             // MQTT logic probably maybe possibly
             // May roll sensor reads into here. depends on how MQTT works
